@@ -28,19 +28,7 @@ func main() {
 	serviceName := "messaging-golang-test"
 	config := messaging.LoadConfiguration(serviceName)
 
-	var messenger *messaging.Context
-	var err error
-
-	for messenger == nil {
-
-		time.Sleep(2 * time.Second)
-
-		messenger, err = messaging.Initialize(config)
-
-		if err != nil {
-			log.Error(err)
-		}
-	}
+	messenger, _ := messaging.Initialize(config)
 
 	testMessage := &telemetry.Temperature{
 		Temp: 37.0,

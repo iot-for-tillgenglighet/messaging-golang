@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
@@ -120,25 +121,36 @@ func LoadConfiguration(serviceName string) Config {
 
 // Initialize takes a Config parameter and initializes a connection,
 // channel, topic exchange, command exchange and service specific
-// command and response queues.
+// command and response queues. Retries every 2 seconds until successfull.
 func Initialize(cfg Config) (*Context, error) {
 
-	context, err := createMessageQueueChannel(&Context{cfg: cfg})
-	if err != nil {
-		return nil, err
-	}
+	var context *Context
+	var err error
 
-	err = createTopicExchange(context)
-	if err != nil {
-		return nil, err
-	}
+	for {
 
-	err = createCommandAndResponseQueues(context)
-	if err != nil {
-		return nil, err
-	}
+		time.Sleep(2 * time.Second)
 
-	return context, nil
+		context, err = createMessageQueueChannel(&Context{cfg: cfg})
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+
+		err = createTopicExchange(context)
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+
+		err = createCommandAndResponseQueues(context)
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+
+		return context, nil
+	}
 }
 
 // TopicMessageHandler is a callback type that should be passed

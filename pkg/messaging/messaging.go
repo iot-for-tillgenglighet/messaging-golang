@@ -159,7 +159,7 @@ type TopicMessageHandler func(amqp.Delivery)
 
 // RegisterTopicMessageHandler creates a subscription queue that is bound
 // to the topic exchange with the provided routing key, starts a consumer
-// for that queue and hands of any received message to the provided
+// for that queue and hands off any received messages to the provided
 // TopicMessageHandler
 func (ctx *Context) RegisterTopicMessageHandler(routingKey string, handler TopicMessageHandler) {
 	queue, err := ctx.channel.QueueDeclare(

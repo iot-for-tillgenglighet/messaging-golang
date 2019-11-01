@@ -3,6 +3,7 @@ package messaging
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
@@ -19,6 +20,8 @@ type IoTHubMessage struct {
 	Timestamp string              `json:"timestamp"`
 }
 
+// Config is an encapsulating context that wraps configuration information
+// used by the initialization methods of the messaging library
 type Config struct {
 	ServiceName string
 	Host        string
@@ -26,17 +29,23 @@ type Config struct {
 	Password    string
 }
 
+// Context encapsulates the underlying messaging primitives, as well as
+// their associated configuration
 type Context struct {
 	connection *amqp.Connection
 	channel    *amqp.Channel
 	cfg        Config
 }
 
+// TopicMessage is an interface used when sending messages to make sure
+// that messages are sent to the correct topic with correct content type
 type TopicMessage interface {
 	ContentType() string
 	TopicName() string
 }
 
+// PublishOnTopic takes a TopicMessage, reads its TopicName property,
+// and publishes it to the correct topic with the correct content type
 func (ctx *Context) PublishOnTopic(message TopicMessage) error {
 	messageBytes, err := json.MarshalIndent(message, "", " ")
 	if err != nil {
@@ -52,6 +61,8 @@ func (ctx *Context) PublishOnTopic(message TopicMessage) error {
 	return err
 }
 
+// Close is a wrapper method to close both the underlying AMQP
+// connection as well as the channel
 func (ctx *Context) Close() {
 	ctx.channel.Close()
 	ctx.connection.Close()
@@ -61,6 +72,8 @@ func (ctx *Context) serviceName() string {
 	return ctx.cfg.ServiceName
 }
 
+// Error encapsulates a lower level error together with an error
+// message provided by the caller that experienced the error
 type Error struct {
 	msg string
 	err error
@@ -77,6 +90,37 @@ func (err *Error) Error() string {
 var commandExchange = "iot-cmd-exchange-direct"
 var topicExchange = "iot-msg-exchange-topic"
 
+func getEnvironmentVariableOrDefault(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+// LoadConfiguration loads configuration values from RABBITMQ_HOST, RABBITMQ_USER
+// and RABBITMQ_PASS. The username and password defaults to the bitnami ootb
+// values for local testing.
+func LoadConfiguration(serviceName string) Config {
+	rabbitMQHostEnvVar := "RABBITMQ_HOST"
+	rabbitMQHost := os.Getenv(rabbitMQHostEnvVar)
+	rabbitMQUser := getEnvironmentVariableOrDefault("RABBITMQ_USER", "user")
+	rabbitMQPass := getEnvironmentVariableOrDefault("RABBITMQ_PASS", "bitnami")
+
+	if rabbitMQHost == "" {
+		log.Fatal("Rabbit MQ host missing. Please set " + rabbitMQHostEnvVar + " to a valid host name or IP.")
+	}
+
+	return Config{
+		ServiceName: serviceName,
+		Host:        rabbitMQHost,
+		User:        rabbitMQUser,
+		Password:    rabbitMQPass,
+	}
+}
+
+// Initialize takes a Config parameter and initializes a connection,
+// channel, topic exchange, command exchange and service specific
+// command and response queues.
 func Initialize(cfg Config) (*Context, error) {
 
 	context, err := createMessageQueueChannel(&Context{cfg: cfg})
@@ -95,6 +139,61 @@ func Initialize(cfg Config) (*Context, error) {
 	}
 
 	return context, nil
+}
+
+// TopicMessageHandler is a callback type that should be passed
+// to RegisterTopicMessageHandler to receive messages from topics.
+type TopicMessageHandler func(amqp.Delivery)
+
+// RegisterTopicMessageHandler creates a subscription queue that is bound
+// to the topic exchange with the provided routing key, starts a consumer
+// for that queue and hands of any received message to the provided
+// TopicMessageHandler
+func (ctx *Context) RegisterTopicMessageHandler(routingKey string, handler TopicMessageHandler) {
+	queue, err := ctx.channel.QueueDeclare(
+		"",    //name
+		false, //durable
+		false, //delete when unused
+		false, //exclusive
+		false, //no-wait
+		nil,   //arguments
+	)
+	if err != nil {
+		log.Fatal("Failed to declare a queue: " + err.Error())
+	}
+	log.Infof("Declared topic subscription queue '%s'.", queue.Name)
+
+	err = ctx.channel.QueueBind(
+		queue.Name,
+		routingKey,
+		topicExchange,
+		false,
+		nil,
+	)
+	if err != nil {
+		log.Fatal("Failed to bind a queue: " + err.Error())
+	}
+	log.Infof("Successfully bound to queue '%s'.", queue.Name)
+
+	messagesFromQueue, err := ctx.channel.Consume(
+		queue.Name, //queue
+		"",         //consumer
+		true,       //auto ack
+		true,       //exclusive
+		false,      //no local
+		false,      //no-wait
+		nil,        //args
+	)
+	if err != nil {
+		log.Fatal("Failed to register a consumer: " + err.Error())
+	}
+	log.Infof("Successfully registered as a consumer of '%s'.", queue.Name)
+
+	go func() {
+		for msg := range messagesFromQueue {
+			handler(msg)
+		}
+	}()
 }
 
 func createMessageQueueChannel(ctx *Context) (*Context, error) {

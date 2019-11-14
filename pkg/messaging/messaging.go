@@ -33,9 +33,10 @@ type Config struct {
 // Context encapsulates the underlying messaging primitives, as well as
 // their associated configuration
 type Context struct {
-	connection *amqp.Connection
-	channel    *amqp.Channel
-	cfg        Config
+	connection            *amqp.Connection
+	channel               *amqp.Channel
+	cfg                   Config
+	connectionClosedError chan *amqp.Error
 }
 
 // TopicMessage is an interface used when sending messages to make sure
@@ -124,6 +125,7 @@ func LoadConfiguration(serviceName string) Config {
 // command and response queues. Retries every 2 seconds until successfull.
 func Initialize(cfg Config) (*Context, error) {
 
+	var connClosedError = make(chan *amqp.Error)
 	var context *Context
 	var err error
 
@@ -131,7 +133,10 @@ func Initialize(cfg Config) (*Context, error) {
 
 		time.Sleep(2 * time.Second)
 
-		context, err = createMessageQueueChannel(&Context{cfg: cfg})
+		context, err = createMessageQueueChannel(&Context{
+			cfg:                   cfg,
+			connectionClosedError: connClosedError,
+		})
 		if err != nil {
 			log.Error(err)
 			continue
@@ -222,7 +227,14 @@ func createMessageQueueChannel(ctx *Context) (*Context, error) {
 	}
 
 	ctx.connection = conn
+	ctx.connection.NotifyClose(ctx.connectionClosedError)
 	ctx.channel = amqpChannel
+
+	go func() {
+		for evt := range ctx.connectionClosedError {
+			log.Fatal("Connection error: " + evt.Error())
+		}
+	}()
 
 	return ctx, nil
 }

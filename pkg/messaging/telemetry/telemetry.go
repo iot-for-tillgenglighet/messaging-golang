@@ -18,6 +18,27 @@ func (msg *Temperature) TopicName() string {
 	return "telemetry.temperature"
 }
 
+// Problem contains information about a certain problem (only type for now)
+type Problem struct {
+	Type string `json:"type"`
+}
+
+// ProblemReport is a telemetry type IoTHubMessage
+type ProblemReport struct {
+	messaging.IoTHubMessage
+	Problem Problem `json:"problem"`
+}
+
+// ContentType returns the ContentType for a ProblemReport telemetry message
+func (msg *ProblemReport) ContentType() string {
+	return "application/json"
+}
+
+// TopicName returns the correct topic name for a ProblemReport telemetry message
+func (msg *ProblemReport) TopicName() string {
+	return "telemetry.problemreport"
+}
+
 // Snowdepth is a telemetry type IoTHubMessage
 type Snowdepth struct {
 	messaging.IoTHubMessage

@@ -18,6 +18,22 @@ func (msg *Temperature) TopicName() string {
 	return "telemetry.temperature"
 }
 
+// WaterTemperature is a telemetry type IoTHubMessage
+type WaterTemperature struct {
+	messaging.IoTHubMessage
+	Temp float64 `json:"temp"`
+}
+
+// ContentType returns the ContentType for a WaterTemperature telemetry message
+func (msg *WaterTemperature) ContentType() string {
+	return "application/json"
+}
+
+// TopicName returns the name of the topic that a WaterTemperature telemetry message should be posted to
+func (msg *WaterTemperature) TopicName() string {
+	return "telemetry.watertemperature"
+}
+
 // Problem contains information about a certain problem (only type for now)
 type Problem struct {
 	Type string `json:"type"`

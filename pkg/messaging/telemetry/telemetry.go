@@ -1,6 +1,10 @@
 package telemetry
 
-import "github.com/iot-for-tillgenglighet/messaging-golang/pkg/messaging"
+import (
+	"time"
+
+	"github.com/iot-for-tillgenglighet/messaging-golang/pkg/messaging"
+)
 
 // Temperature is a telemetry type IoTHubMessage
 type Temperature struct {
@@ -32,6 +36,21 @@ func (msg *WaterTemperature) ContentType() string {
 // TopicName returns the name of the topic that a WaterTemperature telemetry message should be posted to
 func (msg *WaterTemperature) TopicName() string {
 	return "telemetry.watertemperature"
+}
+
+// NewWaterTemperatureTelemetry creates a telemetry message from water temp data
+func NewWaterTemperatureTelemetry(temp float64, device string, lat, lon float64) *WaterTemperature {
+	return &WaterTemperature{
+		Temp: temp,
+		IoTHubMessage: messaging.IoTHubMessage{
+			Origin: messaging.IoTHubMessageOrigin{
+				Device:    device,
+				Latitude:  lat,
+				Longitude: lon,
+			},
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		},
+	}
 }
 
 // Problem contains information about a certain problem (only type for now)

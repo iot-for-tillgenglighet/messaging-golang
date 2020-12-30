@@ -16,7 +16,7 @@ services:
       RABBITMQ_PASS: 'bitnami'
   
   rabbitmq:
-    image: 'bitnami/rabbitmq:3.7'
+    image: 'bitnami/rabbitmq:3.8'
     ports:
       - '4369:4369'
       - '5672:5672'

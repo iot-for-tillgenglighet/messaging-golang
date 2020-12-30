@@ -33,10 +33,68 @@ type Config struct {
 // Context encapsulates the underlying messaging primitives, as well as
 // their associated configuration
 type Context struct {
-	connection            *amqp.Connection
-	channel               *amqp.Channel
-	cfg                   Config
+	connection *amqp.Connection
+	channel    *amqp.Channel
+	cfg        Config
+
+	commandHandlers   map[string]CommandHandler
+	responseQueueName string
+
 	connectionClosedError chan *amqp.Error
+}
+
+// CommandMessage is an interface used when sending commands
+type CommandMessage interface {
+	ContentType() string
+}
+
+// CommandMessageWrapper is used to wrap an incoming command message
+type CommandMessageWrapper interface {
+	Body() []byte
+	RespondWith(CommandMessage) error
+}
+
+// NoteToSelf enqueues a command to the same routing key as the calling service
+// which means that the sender or one of its replicas will receive the command
+func (ctx *Context) NoteToSelf(command CommandMessage) error {
+	return ctx.SendCommandTo(command, ctx.serviceName())
+}
+
+// SendCommandTo enqueues a command to given routing key via the command exchange
+func (ctx *Context) SendCommandTo(command CommandMessage, key string) error {
+	messageBytes, err := json.MarshalIndent(command, "", " ")
+	if err != nil {
+		return &Error{"Unable to marshal command to json!", err}
+	}
+
+	err = ctx.channel.Publish(commandExchange, key, true, false, amqp.Publishing{
+		ContentType: command.ContentType(),
+		ReplyTo:     ctx.responseQueueName,
+		Body:        messageBytes,
+	})
+	if err != nil {
+		return &Error{"Failed to publish a command to " + key + "!", err}
+	}
+
+	return nil
+}
+
+// SendResponseTo enqueues a response to a given routing key via the command exchange
+func (ctx *Context) SendResponseTo(response CommandMessage, key string) error {
+	messageBytes, err := json.MarshalIndent(response, "", " ")
+	if err != nil {
+		return &Error{"Unable to marshal response to json!", err}
+	}
+
+	err = ctx.channel.Publish(commandExchange, key, true, false, amqp.Publishing{
+		ContentType: response.ContentType(),
+		Body:        messageBytes,
+	})
+	if err != nil {
+		return &Error{"Failed to publish a command to " + key + "!", err}
+	}
+
+	return nil
 }
 
 // TopicMessage is an interface used when sending messages to make sure
@@ -70,6 +128,22 @@ func (ctx *Context) Close() {
 	ctx.connection.Close()
 }
 
+//CommandHandler is a callback type to be used for dispatching incoming commands
+type CommandHandler func(CommandMessageWrapper) error
+
+//RegisterCommandHandler registers a handler to be called when a command with a given
+//content type is received
+func (ctx *Context) RegisterCommandHandler(contentType string, handler CommandHandler) error {
+	//TODO: Return an error if a handler has already been registered
+	//TODO: Mutex protection
+	if ctx.commandHandlers == nil {
+		ctx.commandHandlers = map[string]CommandHandler{}
+	}
+
+	ctx.commandHandlers[contentType] = handler
+	return nil
+}
+
 func (ctx *Context) serviceName() string {
 	return ctx.cfg.ServiceName
 }
@@ -89,8 +163,10 @@ func (err *Error) Error() string {
 	return err.msg
 }
 
-var commandExchange = "iot-cmd-exchange-direct"
-var topicExchange = "iot-msg-exchange-topic"
+const (
+	commandExchange = "iot-cmd-exchange-direct"
+	topicExchange   = "iot-msg-exchange-topic"
+)
 
 func getEnvironmentVariableOrDefault(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
@@ -294,16 +370,15 @@ func createCommandAndResponseQueues(ctx *Context) error {
 		return &Error{msg, err}
 	}
 
+	ctx.RegisterCommandHandler(PingCommandContentType, NewPingCommandHandler(ctx))
+
 	go func() {
 		for cmd := range commands {
 			log.Info("Received command: " + string(cmd.Body))
 
-			err = ctx.channel.Publish(commandExchange, cmd.ReplyTo, true, false, amqp.Publishing{
-				ContentType: "application/json",
-				Body:        []byte("{\"cmd\": \"pong\"}"),
-			})
-			if err != nil {
-				log.Error("Failed to publish a pong response to ourselves! : " + err.Error())
+			handler, ok := ctx.commandHandlers[cmd.ContentType]
+			if ok {
+				handler(newAMQPDeliveryWrapper(ctx, &cmd))
 			}
 
 			cmd.Ack(true)
@@ -316,11 +391,9 @@ func createCommandAndResponseQueues(ctx *Context) error {
 		return &Error{msg, err}
 	}
 
-	err = ctx.channel.Publish(commandExchange, serviceName, true, false, amqp.Publishing{
-		ContentType: "application/json",
-		ReplyTo:     responseQueue.Name,
-		Body:        []byte("{\"cmd\": \"ping\"}"),
-	})
+	ctx.responseQueueName = responseQueue.Name
+
+	err = ctx.NoteToSelf(NewPingCommand())
 	if err != nil {
 		return &Error{"Failed to publish a ping command to ourselves!", err}
 	}

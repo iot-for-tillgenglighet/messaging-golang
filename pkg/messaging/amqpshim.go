@@ -3,11 +3,11 @@ package messaging
 import "github.com/streadway/amqp"
 
 type amqpDeliveryWrapper struct {
-	ctx *Context
+	ctx Context
 	d   *amqp.Delivery
 }
 
-func newAMQPDeliveryWrapper(ctx *Context, d *amqp.Delivery) *amqpDeliveryWrapper {
+func newAMQPDeliveryWrapper(ctx Context, d *amqp.Delivery) *amqpDeliveryWrapper {
 	return &amqpDeliveryWrapper{ctx: ctx, d: d}
 }
 

@@ -1,18 +1,6 @@
 package messaging
 
-import (
-	"github.com/streadway/amqp"
-)
-
 type mockedContext struct {
-	connection *amqp.Connection
-	channel    *amqp.Channel
-	cfg        Config
-
-	commandHandlers   map[string]CommandHandler
-	responseQueueName string
-
-	connectionClosedError chan *amqp.Error
 }
 
 // NoteToSelf enqueues a command to the same routing key as the calling service
@@ -48,10 +36,6 @@ func (ctx *mockedContext) Close() {
 func (ctx *mockedContext) RegisterCommandHandler(contentType string, handler CommandHandler) error {
 
 	return nil
-}
-
-func (ctx *mockedContext) serviceName() string {
-	return ctx.cfg.ServiceName
 }
 
 // RegisterTopicMessageHandler creates a subscription queue that is bound

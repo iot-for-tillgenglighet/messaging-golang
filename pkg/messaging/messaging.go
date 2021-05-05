@@ -30,6 +30,8 @@ type Config struct {
 	Password    string
 }
 
+// Context encapsulates the underlying messaging primitives, as well as
+// their associated configuration
 type Context interface {
 	NoteToSelf(command CommandMessage) error
 	SendCommandTo(command CommandMessage, key string) error
@@ -40,8 +42,6 @@ type Context interface {
 	RegisterTopicMessageHandler(routingKey string, handler TopicMessageHandler)
 }
 
-// Context encapsulates the underlying messaging primitives, as well as
-// their associated configuration
 type rabbitMQContext struct {
 	connection *amqp.Connection
 	channel    *amqp.Channel
@@ -222,6 +222,7 @@ func LoadConfiguration(serviceName string) Config {
 func Initialize(cfg Config) (Context, error) {
 
 	if cfg.Host == "" {
+		log.Info("Host name empty, returning mocked context instead.")
 		return &mockedContext{}, nil
 	}
 

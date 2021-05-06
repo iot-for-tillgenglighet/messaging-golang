@@ -32,7 +32,17 @@ type Config struct {
 
 // Context encapsulates the underlying messaging primitives, as well as
 // their associated configuration
-type Context struct {
+type Context interface {
+	NoteToSelf(command CommandMessage) error
+	SendCommandTo(command CommandMessage, key string) error
+	SendResponseTo(response CommandMessage, key string) error
+	PublishOnTopic(message TopicMessage) error
+	Close()
+	RegisterCommandHandler(contentType string, handler CommandHandler) error
+	RegisterTopicMessageHandler(routingKey string, handler TopicMessageHandler)
+}
+
+type rabbitMQContext struct {
 	connection *amqp.Connection
 	channel    *amqp.Channel
 	cfg        Config
@@ -56,12 +66,12 @@ type CommandMessageWrapper interface {
 
 // NoteToSelf enqueues a command to the same routing key as the calling service
 // which means that the sender or one of its replicas will receive the command
-func (ctx *Context) NoteToSelf(command CommandMessage) error {
+func (ctx *rabbitMQContext) NoteToSelf(command CommandMessage) error {
 	return ctx.SendCommandTo(command, ctx.serviceName())
 }
 
 // SendCommandTo enqueues a command to given routing key via the command exchange
-func (ctx *Context) SendCommandTo(command CommandMessage, key string) error {
+func (ctx *rabbitMQContext) SendCommandTo(command CommandMessage, key string) error {
 	messageBytes, err := json.MarshalIndent(command, "", " ")
 	if err != nil {
 		return &Error{"Unable to marshal command to json!", err}
@@ -80,7 +90,7 @@ func (ctx *Context) SendCommandTo(command CommandMessage, key string) error {
 }
 
 // SendResponseTo enqueues a response to a given routing key via the command exchange
-func (ctx *Context) SendResponseTo(response CommandMessage, key string) error {
+func (ctx *rabbitMQContext) SendResponseTo(response CommandMessage, key string) error {
 	messageBytes, err := json.MarshalIndent(response, "", " ")
 	if err != nil {
 		return &Error{"Unable to marshal response to json!", err}
@@ -106,7 +116,7 @@ type TopicMessage interface {
 
 // PublishOnTopic takes a TopicMessage, reads its TopicName property,
 // and publishes it to the correct topic with the correct content type
-func (ctx *Context) PublishOnTopic(message TopicMessage) error {
+func (ctx *rabbitMQContext) PublishOnTopic(message TopicMessage) error {
 	messageBytes, err := json.MarshalIndent(message, "", " ")
 	if err != nil {
 		return &Error{"Unable to marshal telemetry message to json!", err}
@@ -123,7 +133,7 @@ func (ctx *Context) PublishOnTopic(message TopicMessage) error {
 
 // Close is a wrapper method to close both the underlying AMQP
 // connection as well as the channel
-func (ctx *Context) Close() {
+func (ctx *rabbitMQContext) Close() {
 	ctx.channel.Close()
 	ctx.connection.Close()
 }
@@ -133,7 +143,7 @@ type CommandHandler func(CommandMessageWrapper) error
 
 //RegisterCommandHandler registers a handler to be called when a command with a given
 //content type is received
-func (ctx *Context) RegisterCommandHandler(contentType string, handler CommandHandler) error {
+func (ctx *rabbitMQContext) RegisterCommandHandler(contentType string, handler CommandHandler) error {
 	//TODO: Return an error if a handler has already been registered
 	//TODO: Mutex protection
 	if ctx.commandHandlers == nil {
@@ -144,7 +154,7 @@ func (ctx *Context) RegisterCommandHandler(contentType string, handler CommandHa
 	return nil
 }
 
-func (ctx *Context) serviceName() string {
+func (ctx *rabbitMQContext) serviceName() string {
 	return ctx.cfg.ServiceName
 }
 
@@ -183,33 +193,48 @@ func LoadConfiguration(serviceName string) Config {
 	rabbitMQHost := os.Getenv(rabbitMQHostEnvVar)
 	rabbitMQUser := getEnvironmentVariableOrDefault("RABBITMQ_USER", "user")
 	rabbitMQPass := getEnvironmentVariableOrDefault("RABBITMQ_PASS", "bitnami")
+	rabbitMQDisabled := getEnvironmentVariableOrDefault("RABBITMQ_DISABLED", "false")
 
-	if rabbitMQHost == "" {
-		log.Fatal("Rabbit MQ host missing. Please set " + rabbitMQHostEnvVar + " to a valid host name or IP.")
+	if rabbitMQDisabled != "true" {
+		if rabbitMQHost == "" {
+			log.Fatal("Rabbit MQ host missing. Please set " + rabbitMQHostEnvVar + " to a valid host name or IP.")
+		}
+
+		return Config{
+			ServiceName: serviceName,
+			Host:        rabbitMQHost,
+			User:        rabbitMQUser,
+			Password:    rabbitMQPass,
+		}
 	}
 
 	return Config{
 		ServiceName: serviceName,
-		Host:        rabbitMQHost,
-		User:        rabbitMQUser,
-		Password:    rabbitMQPass,
+		Host:        "",
+		User:        "",
+		Password:    "",
 	}
 }
 
 // Initialize takes a Config parameter and initializes a connection,
 // channel, topic exchange, command exchange and service specific
 // command and response queues. Retries every 2 seconds until successfull.
-func Initialize(cfg Config) (*Context, error) {
+func Initialize(cfg Config) (Context, error) {
+
+	if cfg.Host == "" {
+		log.Info("Host name empty, returning mocked context instead.")
+		return &mockedContext{}, nil
+	}
 
 	var connClosedError = make(chan *amqp.Error)
-	var context *Context
+	var context *rabbitMQContext
 	var err error
 
 	for {
 
 		time.Sleep(2 * time.Second)
 
-		context, err = createMessageQueueChannel(&Context{
+		context, err = createMessageQueueChannel(&rabbitMQContext{
 			cfg:                   cfg,
 			connectionClosedError: connClosedError,
 		})
@@ -242,7 +267,7 @@ type TopicMessageHandler func(amqp.Delivery)
 // to the topic exchange with the provided routing key, starts a consumer
 // for that queue and hands off any received messages to the provided
 // TopicMessageHandler
-func (ctx *Context) RegisterTopicMessageHandler(routingKey string, handler TopicMessageHandler) {
+func (ctx *rabbitMQContext) RegisterTopicMessageHandler(routingKey string, handler TopicMessageHandler) {
 	queue, err := ctx.channel.QueueDeclare(
 		"",    //name
 		false, //durable
@@ -289,7 +314,7 @@ func (ctx *Context) RegisterTopicMessageHandler(routingKey string, handler Topic
 	}()
 }
 
-func createMessageQueueChannel(ctx *Context) (*Context, error) {
+func createMessageQueueChannel(ctx *rabbitMQContext) (*rabbitMQContext, error) {
 	connectionString := fmt.Sprintf("amqp://%s:%s@%s:5672/", ctx.cfg.User, ctx.cfg.Password, ctx.cfg.Host)
 	conn, err := amqp.Dial(connectionString)
 	if err != nil {
@@ -315,7 +340,7 @@ func createMessageQueueChannel(ctx *Context) (*Context, error) {
 	return ctx, nil
 }
 
-func createCommandExchange(ctx *Context) error {
+func createCommandExchange(ctx *rabbitMQContext) error {
 	err := ctx.channel.ExchangeDeclare(commandExchange, amqp.ExchangeDirect, false, false, false, false, nil)
 
 	if err != nil {
@@ -325,7 +350,7 @@ func createCommandExchange(ctx *Context) error {
 	return err
 }
 
-func createTopicExchange(ctx *Context) error {
+func createTopicExchange(ctx *rabbitMQContext) error {
 	err := ctx.channel.ExchangeDeclare(topicExchange, amqp.ExchangeTopic, false, false, false, false, nil)
 
 	if err != nil {
@@ -335,7 +360,7 @@ func createTopicExchange(ctx *Context) error {
 	return err
 }
 
-func createCommandAndResponseQueues(ctx *Context) error {
+func createCommandAndResponseQueues(ctx *rabbitMQContext) error {
 	err := createCommandExchange(ctx)
 	if err != nil {
 		return err

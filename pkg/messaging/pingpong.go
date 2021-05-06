@@ -35,7 +35,7 @@ func NewPingCommand() CommandMessage {
 
 //NewPingCommandHandler returns a callback function to be called when ping commands
 //are received
-func NewPingCommandHandler(ctx *Context) CommandHandler {
+func NewPingCommandHandler(ctx Context) CommandHandler {
 	return func(wrapper CommandMessageWrapper) error {
 		ping := &PingCommand{}
 		err := json.Unmarshal(wrapper.Body(), ping)
